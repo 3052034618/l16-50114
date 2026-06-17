@@ -15,7 +15,6 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import { ProgressBar } from '@/components/ui/ProgressBar';
 import type { NutritionAnalysis } from '@/types';
 import { RECOMMENDED_DAILY, getNutrientStatus } from '@/utils/nutrition';
-import { getWeekDates } from '@/utils/date';
 
 interface NutritionChartProps {
   analysis: NutritionAnalysis;
@@ -30,15 +29,11 @@ export const NutritionChart = ({ analysis }: NutritionChartProps) => {
     { name: '碳水', value: analysis.avgCarbs * 4, color: COLORS[2] },
   ];
 
-  const { dates } = getWeekDates();
-  const dailyData = dates.map((date) => {
-    const dayData = analysis.dailyData.find((d) => d.date === date);
-    return {
-      date: date.slice(5),
-      热量: dayData?.calories || 0,
-      蛋白质: dayData?.protein || 0,
-    };
-  });
+  const dailyData = analysis.dailyData.map((d) => ({
+    date: d.date.slice(5),
+    热量: d.calories,
+    蛋白质: d.protein,
+  }));
 
   const nutrients = [
     {
@@ -104,14 +99,19 @@ export const NutritionChart = ({ analysis }: NutritionChartProps) => {
 
         <Card className="animate-slide-up animate-stagger-2">
           <CardHeader>
-            <CardTitle>每日摄入趋势</CardTitle>
+            <CardTitle>每日摄入趋势（{analysis.period === 'week' ? '近7天' : '近30天'}）</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="h-64">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={dailyData}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#e7e5e4" />
-                  <XAxis dataKey="date" stroke="#78716c" fontSize={12} />
+                  <XAxis 
+                    dataKey="date" 
+                    stroke="#78716c" 
+                    fontSize={12}
+                    interval={analysis.period === 'month' ? 3 : 0}
+                  />
                   <YAxis stroke="#78716c" fontSize={12} />
                   <Tooltip
                     contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}

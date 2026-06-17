@@ -3,7 +3,8 @@ import type { Consumption, ConsumptionItem, Recharge } from '../types';
 import { mockConsumptions, getConsumptionsByStudent } from '../data/mockConsumptions';
 import { mockRecharges, getRechargesByParent, getRechargesByStudent } from '../data/mockRecharges';
 import { storage } from '../utils/storage';
-import { formatDateTime } from '../utils/date';
+import { formatDateTime, getToday } from '../utils/date';
+import { useStatsStore } from './statsStore';
 
 interface ConsumptionState {
   consumptions: Consumption[];
@@ -66,6 +67,14 @@ export const useConsumptionStore = create<ConsumptionState>((set, get) => ({
       storage.set('consumptions', updated);
       return { consumptions: updated };
     });
+
+    useStatsStore.getState().recordConsumption(
+      getToday(),
+      items,
+      totalAmount,
+      stallId,
+      stallName
+    );
 
     return newConsumption;
   },

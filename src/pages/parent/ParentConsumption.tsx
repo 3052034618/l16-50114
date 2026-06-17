@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { Calendar, ArrowDownCircle, Filter, TrendingUp, User, PieChart } from 'lucide-react';
 import {
   PieChart as RechartsPieChart,
@@ -20,9 +20,39 @@ import { Badge } from '@/components/ui/Badge';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/Tabs';
 import { StatCard } from '@/components/ui/StatCard';
 import { Tag } from '@/components/ui/Tag';
+import { formatDate } from '@/utils/date';
 import type { Student, Consumption } from '@/types';
 
 const COLORS = ['#22c55e', '#f97316', '#3b82f6', '#eab308', '#8b5cf6'];
+
+const getDateRange = (range: 'week' | 'month' | 'all'): { start: string; end: string; days: number } => {
+  const end = new Date();
+  const start = new Date();
+  let days = 7;
+  if (range === 'week') {
+    start.setDate(end.getDate() - 6);
+    days = 7;
+  } else if (range === 'month') {
+    start.setDate(end.getDate() - 29);
+    days = 30;
+  } else {
+    start.setFullYear(2020, 0, 1);
+    days = 30;
+  }
+  return { start: formatDate(start), end: formatDate(end), days };
+};
+
+const getContinuousDates = (startDate: string, endDate: string): string[] => {
+  const dates: string[] = [];
+  const start = new Date(startDate);
+  const end = new Date(endDate);
+  for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+    dates.push(formatDate(d));
+  }
+  return dates;
+};
+
+type ConsumptionFilter = 'all' | 'booking' | 'onsite';
 
 export default function ParentConsumption() {
   const { currentUser, getBoundStudents, init: initAuth } = useAuthStore();
@@ -36,6 +66,7 @@ export default function ParentConsumption() {
 
   const [selectedStudent, setSelectedStudent] = useState<Student | null>(null);
   const [timeRange, setTimeRange] = useState<'week' | 'month' | 'all'>('week');
+  const [filterType, setFilterType] = useState<ConsumptionFilter>('all');
 
   useEffect(() => {
     initAuth();
@@ -51,54 +82,78 @@ export default function ParentConsumption() {
     }
   }, [boundStudents, selectedStudent]);
 
-  const today = new Date().toISOString().split('T')[0];
-  const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-  const monthAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+  const { start: startDate, end: endDate, days } = getDateRange(timeRange);
 
-  const getStartDate = () => {
-    if (timeRange === 'week') return weekAgo;
-    if (timeRange === 'month') return monthAgo;
-    return '2020-01-01';
-  };
+  const allConsumptions = useMemo(() => {
+    if (!selectedStudent) return [];
+    return getConsumptionsByStudent(selectedStudent.id).filter(
+      (c) => timeRange === 'all' || (c.timestamp >= startDate && c.timestamp <= endDate + ' 23:59:59')
+    );
+  }, [selectedStudent, getConsumptionsByStudent, startDate, endDate, timeRange]);
 
-  const studentConsumptions = selectedStudent
-    ? getConsumptionsByStudent(selectedStudent.id).filter((c) => c.timestamp >= getStartDate())
-    : [];
+  const filteredConsumptions = useMemo(() => {
+    if (filterType === 'all') return allConsumptions;
+    return allConsumptions.filter((c) => c.type === filterType);
+  }, [allConsumptions, filterType]);
 
-  const totalStats = selectedStudent
-    ? getConsumptionStats(selectedStudent.id, getStartDate(), today)
-    : { total: 0, count: 0 };
+  const totalStats = useMemo(() => {
+    const records = filteredConsumptions;
+    return {
+      total: records.reduce((sum, r) => sum + r.totalAmount, 0),
+      count: records.length,
+    };
+  }, [filteredConsumptions]);
 
   const averagePerMeal = totalStats.count > 0 ? totalStats.total / totalStats.count : 0;
 
-  const typeStats = studentConsumptions.reduce(
-    (acc, c) => {
-      if (c.type === 'booking') acc.booking += c.totalAmount;
-      else acc.onsite += c.totalAmount;
-      return acc;
-    },
-    { booking: 0, onsite: 0 }
-  );
+  const typeStats = useMemo(() => {
+    return allConsumptions.reduce(
+      (acc, c) => {
+        if (c.type === 'booking') acc.booking += c.totalAmount;
+        else acc.onsite += c.totalAmount;
+        return acc;
+      },
+      { booking: 0, onsite: 0 }
+    );
+  }, [allConsumptions]);
 
-  const pieData = [
-    { name: '预订消费', value: typeStats.booking },
-    { name: '现场消费', value: typeStats.onsite },
-  ];
+  const pieData = useMemo(() => {
+    if (filterType === 'all') {
+      return [
+        { name: '预订消费', value: typeStats.booking },
+        { name: '现场消费', value: typeStats.onsite },
+      ];
+    } else if (filterType === 'booking') {
+      return [{ name: '预订消费', value: typeStats.booking }];
+    } else {
+      return [{ name: '现场消费', value: typeStats.onsite }];
+    }
+  }, [typeStats, filterType]);
 
-  const dailyStats = studentConsumptions.reduce((acc, c) => {
-    const date = c.timestamp.split(' ')[0];
-    if (!acc[date]) acc[date] = 0;
-    acc[date] += c.totalAmount;
-    return acc;
-  }, {} as Record<string, number>);
+  const barData = useMemo(() => {
+    const dateList = getContinuousDates(startDate, endDate);
+    const dateMap = new Map<string, number>();
+    dateList.forEach((d) => dateMap.set(d, 0));
 
-  const barData = Object.entries(dailyStats)
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([date, amount]) => ({
-      date: date.slice(5),
-      消费金额: amount,
-    }))
-    .slice(-7);
+    filteredConsumptions.forEach((c) => {
+      const date = c.timestamp.split(' ')[0];
+      if (dateMap.has(date)) {
+        dateMap.set(date, (dateMap.get(date) || 0) + c.totalAmount);
+      }
+    });
+
+    return dateList
+      .slice(-days)
+      .map((date) => ({
+        date: date.slice(5),
+        消费金额: Math.round(dateMap.get(date) || 0),
+      }));
+  }, [filteredConsumptions, startDate, endDate, days]);
+
+  const bookingCount = allConsumptions.filter((c) => c.type === 'booking').length;
+  const onsiteCount = allConsumptions.filter((c) => c.type === 'onsite').length;
+  const displayBookingCount = filterType === 'onsite' ? 0 : bookingCount;
+  const displayOnsiteCount = filterType === 'booking' ? 0 : onsiteCount;
 
   const renderConsumptionItem = (consumption: Consumption) => (
     <div
@@ -197,7 +252,7 @@ export default function ParentConsumption() {
               title="消费笔数"
               value={totalStats.count.toString()}
               subtitle="预订消费"
-              subtitleValue={`${studentConsumptions.filter((c) => c.type === 'booking').length}笔`}
+              subtitleValue={`${displayBookingCount}笔`}
               icon={<Calendar className="w-6 h-6" />}
               variant="success"
             />
@@ -281,63 +336,37 @@ export default function ParentConsumption() {
           <Card>
             <CardHeader className="flex flex-row items-center justify-between pb-3">
               <CardTitle>消费明细</CardTitle>
-              <Tabs defaultValue="all" className="w-auto">
+              <Tabs value={filterType} onValueChange={(v) => setFilterType(v as ConsumptionFilter)} className="w-auto">
                 <TabsList>
                   <TabsTrigger value="all">
                     全部
                     <Badge variant="secondary" className="ml-2">
-                      {studentConsumptions.length}
+                      {allConsumptions.length}
                     </Badge>
                   </TabsTrigger>
                   <TabsTrigger value="booking">
                     预订
                     <Badge variant="success" className="ml-2">
-                      {studentConsumptions.filter((c) => c.type === 'booking').length}
+                      {bookingCount}
                     </Badge>
                   </TabsTrigger>
                   <TabsTrigger value="onsite">
                     现场
                     <Badge variant="warning" className="ml-2">
-                      {studentConsumptions.filter((c) => c.type === 'onsite').length}
+                      {onsiteCount}
                     </Badge>
                   </TabsTrigger>
                 </TabsList>
               </Tabs>
             </CardHeader>
             <CardContent>
-              <Tabs defaultValue="all">
-                <TabsContent value="all" className="mt-0">
-                  {studentConsumptions.length > 0 ? (
-                    <div className="space-y-3">
-                      {studentConsumptions.map(renderConsumptionItem)}
-                    </div>
-                  ) : (
-                    <EmptyState />
-                  )}
-                </TabsContent>
-                <TabsContent value="booking" className="mt-0">
-                  {studentConsumptions.filter((c) => c.type === 'booking').length > 0 ? (
-                    <div className="space-y-3">
-                      {studentConsumptions
-                        .filter((c) => c.type === 'booking')
-                        .map(renderConsumptionItem)}
-                    </div>
-                  ) : (
-                    <EmptyState />
-                  )}
-                </TabsContent>
-                <TabsContent value="onsite" className="mt-0">
-                  {studentConsumptions.filter((c) => c.type === 'onsite').length > 0 ? (
-                    <div className="space-y-3">
-                      {studentConsumptions
-                        .filter((c) => c.type === 'onsite')
-                        .map(renderConsumptionItem)}
-                    </div>
-                  ) : (
-                    <EmptyState />
-                  )}
-                </TabsContent>
-              </Tabs>
+              {filteredConsumptions.length > 0 ? (
+                <div className="space-y-3">
+                  {filteredConsumptions.map(renderConsumptionItem)}
+                </div>
+              ) : (
+                <EmptyState />
+              )}
             </CardContent>
           </Card>
         </>

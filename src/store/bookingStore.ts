@@ -1,8 +1,13 @@
 import { create } from 'zustand';
-import type { Booking, BookingItem, Dish } from '../types';
+import type { Booking, BookingItem, Dish, ConsumptionItem } from '../types';
 import { mockBookings, getTodayBookings } from '../data/mockBookings';
 import { storage } from '../utils/storage';
 import { formatDateTime, getToday } from '../utils/date';
+import { useDishStore } from './dishStore';
+import { useConsumptionStore } from './consumptionStore';
+import { useAuthStore } from './authStore';
+import { useNutritionStore } from './nutritionStore';
+import { useStatsStore } from './statsStore';
 
 export interface CartItem {
   dish: Dish;
@@ -119,6 +124,10 @@ export const useBookingStore = create<BookingState>((set, get) => ({
       pickupCode: generatePickupCode(mealType),
     };
 
+    cart.forEach((item) => {
+      useDishStore.getState().updateStock(item.dish.id, item.quantity);
+    });
+
     set((state) => {
       const updated = [...state.bookings, newBooking];
       storage.set('bookings', updated);
@@ -129,6 +138,13 @@ export const useBookingStore = create<BookingState>((set, get) => ({
   },
 
   cancelBooking: (bookingId) => {
+    const booking = get().bookings.find((b) => b.id === bookingId);
+    if (booking) {
+      booking.items.forEach((item) => {
+        useDishStore.getState().updateStock(item.dishId, -item.quantity);
+      });
+    }
+
     set((state) => {
       const updated = state.bookings.map((b) =>
         b.id === bookingId ? { ...b, status: 'cancelled' as const } : b
@@ -139,6 +155,65 @@ export const useBookingStore = create<BookingState>((set, get) => ({
   },
 
   confirmPickup: (bookingId) => {
+    const booking = get().bookings.find((b) => b.id === bookingId);
+    if (!booking || booking.status === 'picked') return;
+
+    const studentBalance = useConsumptionStore.getState().getStudentBalance(booking.studentId);
+    const newBalance = Math.round((studentBalance - booking.totalAmount) * 100) / 100;
+
+    const consumptionItems: ConsumptionItem[] = booking.items.map((item) => ({
+      dishId: item.dishId,
+      dishName: item.dishName,
+      quantity: item.quantity,
+      unitPrice: item.unitPrice,
+      subtotal: item.subtotal,
+    }));
+
+    const firstDish = useDishStore.getState().getDishById(booking.items[0]?.dishId);
+
+    useConsumptionStore.getState().addConsumption(
+      booking.studentId,
+      booking.studentName,
+      'booking',
+      consumptionItems,
+      newBalance,
+      firstDish?.stallId,
+      firstDish?.stallName
+    );
+
+    useAuthStore.getState().updateStudentBalance(booking.studentId, newBalance);
+
+    const today = getToday();
+    let totalCalories = 0;
+    let totalProtein = 0;
+    let totalFat = 0;
+    let totalCarbs = 0;
+    booking.items.forEach((item) => {
+      const dish = useDishStore.getState().getDishById(item.dishId);
+      if (dish) {
+        totalCalories += dish.nutrition.calories * item.quantity;
+        totalProtein += dish.nutrition.protein * item.quantity;
+        totalFat += dish.nutrition.fat * item.quantity;
+        totalCarbs += dish.nutrition.carbs * item.quantity;
+      }
+    });
+    useNutritionStore.getState().addNutritionFromConsumption(
+      booking.studentId,
+      today,
+      totalCalories,
+      totalProtein,
+      totalFat,
+      totalCarbs
+    );
+
+    useStatsStore.getState().recordConsumption(
+      today,
+      consumptionItems,
+      booking.totalAmount,
+      firstDish?.stallId,
+      firstDish?.stallName
+    );
+
     set((state) => {
       const updated = state.bookings.map((b) =>
         b.id === bookingId

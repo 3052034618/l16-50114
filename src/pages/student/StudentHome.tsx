@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react';
-import { Clock, MapPin, Filter, Search } from 'lucide-react';
+import { Clock, MapPin, Filter, Search, CheckCircle } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import { useDishStore } from '@/store/dishStore';
 import { useBookingStore } from '@/store/bookingStore';
+import { useConsumptionStore } from '@/store/consumptionStore';
 import { getChineseDate, getMealType } from '@/utils/date';
 import { DishCard } from '@/components/business/DishCard';
 import { CartSidebar } from '@/components/business/CartSidebar';
@@ -16,15 +17,18 @@ import type { Dish } from '@/types';
 export default function StudentHome() {
   const { currentUser } = useAuthStore();
   const { dishes, stalls, getAvailableDishes, init: initDishes } = useDishStore();
-  const { cart, addToCart, removeFromCart, updateCartQuantity, mealType, setMealType, init: initBookings } = useBookingStore();
+  const { cart, addToCart, removeFromCart, updateCartQuantity, mealType, setMealType, submitBooking, init: initBookings } = useBookingStore();
+  const { getStudentBalance, init: initConsumption } = useConsumptionStore();
   const [selectedStall, setSelectedStall] = useState<string | 'all'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [showCart, setShowCart] = useState(false);
+  const [showSuccess, setShowSuccess] = useState(false);
 
   useEffect(() => {
     initDishes();
     initBookings();
-  }, [initDishes, initBookings]);
+    initConsumption();
+  }, [initDishes, initBookings, initConsumption]);
 
   const currentMealType = getMealType();
 
@@ -48,16 +52,36 @@ export default function StudentHome() {
   };
 
   const student = currentUser?.role === 'student' ? currentUser : null;
+  const studentId = student?.id || '';
+  const balance = studentId ? getStudentBalance(studentId) : 0;
+
+  const handleSubmitBooking = () => {
+    if (!student) return;
+    const result = submitBooking(student.id, student.name);
+    if (result) {
+      setShowCart(false);
+      setShowSuccess(true);
+      setTimeout(() => setShowSuccess(false), 3000);
+    }
+  };
 
   return (
     <div className="space-y-6">
+      {showSuccess && (
+        <div className="fixed top-6 right-6 z-50 bg-green-500 text-white px-6 py-4 rounded-xl shadow-xl animate-slide-up flex items-center gap-3">
+          <CheckCircle className="w-6 h-6" />
+          <div>
+            <p className="font-semibold">预订成功！</p>
+            <p className="text-sm text-white/90">可在"取餐核销"页面查看取餐码</p>
+          </div>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <StatCard
           title="账户余额"
-          value={`¥${student?.balance?.toFixed(2) || '0.00'}`}
+          value={`¥${balance.toFixed(2)}`}
           icon={<span className="text-2xl">💰</span>}
-          trend="+2.3%"
-          trendUp={true}
           variant="primary"
         />
         <StatCard
@@ -170,6 +194,7 @@ export default function StudentHome() {
         isOpen={showCart}
         onClose={() => setShowCart(false)}
         onOpen={() => setShowCart(true)}
+        onSubmit={handleSubmitBooking}
       />
     </div>
   );

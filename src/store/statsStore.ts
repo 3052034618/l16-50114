@@ -1,12 +1,19 @@
 import { create } from 'zustand';
-import type { SalesStats, DailyPreparation, PreparationItem } from '../types';
-import { mockSalesStats, getStatsByDate, getStatsByDateRange, getAggregatedStats, getTopDishes } from '../data/mockStats';
+import type { SalesStats, DailyPreparation, PreparationItem, ConsumptionItem, DishSale } from '../types';
+import { mockSalesStats } from '../data/mockStats';
 import { storage } from '../utils/storage';
-import { getToday } from '../utils/date';
+import { getToday, formatDate } from '../utils/date';
 
 interface StatsState {
   salesStats: SalesStats[];
   preparations: DailyPreparation[];
+  recordConsumption: (
+    date: string,
+    items: ConsumptionItem[],
+    totalAmount: number,
+    stallId?: string,
+    stallName?: string
+  ) => void;
   getStatsByDate: (date: string) => SalesStats | undefined;
   getStatsByDateRange: (startDate: string, endDate: string) => SalesStats[];
   getAggregatedStats: (
@@ -35,6 +42,16 @@ interface StatsState {
   init: () => void;
 }
 
+const getDateRangeDates = (startDate: string, endDate: string): string[] => {
+  const dates: string[] = [];
+  const start = new Date(startDate);
+  const end = new Date(endDate);
+  for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+    dates.push(formatDate(d));
+  }
+  return dates;
+};
+
 export const useStatsStore = create<StatsState>((set, get) => ({
   salesStats: [],
   preparations: [],
@@ -43,6 +60,82 @@ export const useStatsStore = create<StatsState>((set, get) => ({
     const savedStats = storage.get<SalesStats[]>('salesStats', mockSalesStats);
     const savedPreparations = storage.get<DailyPreparation[]>('preparations', []);
     set({ salesStats: savedStats, preparations: savedPreparations });
+  },
+
+  recordConsumption: (date, items, totalAmount, stallId, stallName) => {
+    set((state) => {
+      const existingIndex = state.salesStats.findIndex((s) => s.date === date);
+      let updatedStats: SalesStats[];
+
+      if (existingIndex >= 0) {
+        updatedStats = state.salesStats.map((s, idx) => {
+          if (idx !== existingIndex) return s;
+
+          const newDishSales: DishSale[] = [...s.dishSales];
+          items.forEach((item) => {
+            const existingDish = newDishSales.find((d) => d.dishId === item.dishId);
+            if (existingDish) {
+              existingDish.quantity += item.quantity;
+              existingDish.revenue += item.subtotal;
+            } else {
+              newDishSales.push({
+                dishId: item.dishId,
+                dishName: item.dishName,
+                quantity: item.quantity,
+                revenue: item.subtotal,
+              });
+            }
+          });
+
+          const newStallStats = [...s.stallStats];
+          if (stallId && stallName) {
+            const existingStall = newStallStats.find((st) => st.stallId === stallId);
+            if (existingStall) {
+              existingStall.revenue += totalAmount;
+              existingStall.orders += 1;
+            } else {
+              newStallStats.push({
+                stallId,
+                stallName,
+                revenue: totalAmount,
+                orders: 1,
+              });
+            }
+          }
+
+          return {
+            ...s,
+            totalRevenue: s.totalRevenue + totalAmount,
+            totalOrders: s.totalOrders + 1,
+            dishSales: newDishSales,
+            stallStats: newStallStats,
+          };
+        });
+      } else {
+        const dishSales: DishSale[] = items.map((item) => ({
+          dishId: item.dishId,
+          dishName: item.dishName,
+          quantity: item.quantity,
+          revenue: item.subtotal,
+        }));
+
+        const stallStats = stallId && stallName
+          ? [{ stallId, stallName, revenue: totalAmount, orders: 1 }]
+          : [];
+
+        const newStat: SalesStats = {
+          date,
+          totalRevenue: totalAmount,
+          totalOrders: 1,
+          dishSales,
+          stallStats,
+        };
+        updatedStats = [...state.salesStats, newStat];
+      }
+
+      storage.set('salesStats', updatedStats);
+      return { salesStats: updatedStats };
+    });
   },
 
   getStatsByDate: (date) => {
@@ -54,11 +147,48 @@ export const useStatsStore = create<StatsState>((set, get) => ({
   },
 
   getAggregatedStats: (startDate, endDate) => {
-    return getAggregatedStats(startDate, endDate);
+    const stats = get().getStatsByDateRange(startDate, endDate);
+    const totalRevenue = stats.reduce((sum, s) => sum + s.totalRevenue, 0);
+    const totalOrders = stats.reduce((sum, s) => sum + s.totalOrders, 0);
+    const avgOrderValue = totalOrders > 0 ? Math.round((totalRevenue / totalOrders) * 100) / 100 : 0;
+
+    const allDates = getDateRangeDates(startDate, endDate);
+    const statsMap = new Map(stats.map((s) => [s.date, s]));
+    const dailyData = allDates.map((date) => {
+      const s = statsMap.get(date);
+      return {
+        date: date.slice(5),
+        revenue: s?.totalRevenue || 0,
+        orders: s?.totalOrders || 0,
+      };
+    });
+
+    return { totalRevenue, totalOrders, avgOrderValue, dailyData };
   },
 
   getTopDishes: (startDate, endDate, limit = 10) => {
-    return getTopDishes(startDate, endDate, limit);
+    const stats = get().getStatsByDateRange(startDate, endDate);
+    const dishMap = new Map<string, { name: string; quantity: number; revenue: number }>();
+
+    stats.forEach((s) => {
+      s.dishSales.forEach((ds) => {
+        const existing = dishMap.get(ds.dishId);
+        if (existing) {
+          existing.quantity += ds.quantity;
+          existing.revenue += ds.revenue;
+        } else {
+          dishMap.set(ds.dishId, {
+            name: ds.dishName,
+            quantity: ds.quantity,
+            revenue: ds.revenue,
+          });
+        }
+      });
+    });
+
+    return Array.from(dishMap.values())
+      .sort((a, b) => b.quantity - a.quantity)
+      .slice(0, limit);
   },
 
   getPreparation: (date, mealType) => {

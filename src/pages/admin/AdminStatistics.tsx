@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { TrendingUp, DollarSign, ShoppingBag, Users, Calendar, BarChart3, PieChart } from 'lucide-react';
 import {
   LineChart,
@@ -19,7 +19,6 @@ import { useStatsStore } from '@/store/statsStore';
 import { useDishStore } from '@/store/dishStore';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
-import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/Tabs';
 import { StatCard } from '@/components/ui/StatCard';
 import { Tag } from '@/components/ui/Tag';
 
@@ -29,9 +28,10 @@ export default function AdminStatistics() {
   const {
     getAggregatedStats,
     getTopDishes,
+    getStatsByDateRange,
     init: initStats,
   } = useStatsStore();
-  const { stalls, init: initDishes } = useDishStore();
+  const { stalls, dishes, init: initDishes } = useDishStore();
 
   const [timeRange, setTimeRange] = useState<'week' | 'month'>('week');
 
@@ -48,23 +48,42 @@ export default function AdminStatistics() {
   const stats = getAggregatedStats(startDate, today);
   const topDishes = getTopDishes(startDate, today, 10);
 
-  const stallStats = stalls.map((stall) => {
-    const stallDishes = topDishes.filter((dish) => {
-      const dishInfo = useDishStore.getState().dishes.find((d) => d.name === dish.name);
-      return dishInfo?.stallId === stall.id;
+  const stallStats = useMemo(() => {
+    const rangeStats = getStatsByDateRange(startDate, today);
+    const stallMap = new Map<string, { stallId: string; stallName: string; revenue: number; orders: number; dishCount: number }>();
+
+    stalls.forEach((stall) => {
+      stallMap.set(stall.id, {
+        stallId: stall.id,
+        stallName: stall.name,
+        revenue: 0,
+        orders: 0,
+        dishCount: 0,
+      });
     });
-    const revenue = stallDishes.reduce((sum, d) => sum + d.revenue, 0);
-    const quantity = stallDishes.reduce((sum, d) => sum + d.quantity, 0);
-    return {
-      ...stall,
-      revenue,
-      quantity,
-      dishCount: stallDishes.length,
-    };
-  }).filter((s) => s.revenue > 0);
+
+    rangeStats.forEach((s) => {
+      s.stallStats.forEach((ss) => {
+        const existing = stallMap.get(ss.stallId);
+        if (existing) {
+          existing.revenue += ss.revenue;
+          existing.orders += ss.orders;
+        }
+      });
+
+      s.dishSales.forEach((ds) => {
+        const dishInfo = dishes.find((d) => d.id === ds.dishId);
+        if (dishInfo && stallMap.has(dishInfo.stallId)) {
+          stallMap.get(dishInfo.stallId)!.dishCount++;
+        }
+      });
+    });
+
+    return Array.from(stallMap.values()).filter((s) => s.revenue > 0 || s.orders > 0);
+  }, [getStatsByDateRange, startDate, today, stalls, dishes]);
 
   const pieData = stallStats.map((s) => ({
-    name: s.name,
+    name: s.stallName,
     value: s.revenue,
   }));
 
@@ -72,6 +91,12 @@ export default function AdminStatistics() {
     ...d,
     客单价: d.orders > 0 ? d.revenue / d.orders : 0,
   }));
+
+  const validDays = stats.dailyData.filter((d) => d.revenue > 0 || d.orders > 0).length;
+  const avgDailyRevenue = validDays > 0 ? stats.totalRevenue / validDays : 0;
+  const trendPercent = stats.dailyData.length >= 2
+    ? ((stats.dailyData[stats.dailyData.length - 1].revenue - stats.dailyData[0].revenue) / Math.max(1, stats.dailyData[0].revenue)) * 100
+    : 0;
 
   return (
     <div className="space-y-6">
@@ -107,8 +132,8 @@ export default function AdminStatistics() {
           title="总营收"
           value={`¥${stats.totalRevenue.toFixed(2)}`}
           icon={<DollarSign className="w-6 h-6" />}
-          trend="+12.5%"
-          trendUp={true}
+          trend={`${trendPercent >= 0 ? '+' : ''}${trendPercent.toFixed(1)}%`}
+          trendUp={trendPercent >= 0}
           variant="primary"
         />
         <StatCard
@@ -116,8 +141,6 @@ export default function AdminStatistics() {
           value={stats.totalOrders.toString()}
           subtitle="总笔数"
           icon={<ShoppingBag className="w-6 h-6" />}
-          trend="+8.3%"
-          trendUp={true}
           variant="success"
         />
         <StatCard
@@ -125,8 +148,6 @@ export default function AdminStatistics() {
           value={`¥${stats.avgOrderValue.toFixed(2)}`}
           subtitle="平均每单"
           icon={<Users className="w-6 h-6" />}
-          trend="+3.8%"
-          trendUp={true}
           variant="accent"
         />
         <StatCard
@@ -232,19 +253,19 @@ export default function AdminStatistics() {
           <CardContent>
             <div className="h-72">
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={stallStats.sort((a, b) => b.quantity - a.quantity)}>
+                <BarChart data={stallStats.sort((a, b) => b.orders - a.orders)}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#e7e5e4" />
-                  <XAxis dataKey="name" stroke="#78716c" fontSize={12} />
+                  <XAxis dataKey="stallName" stroke="#78716c" fontSize={12} />
                   <YAxis stroke="#78716c" fontSize={12} />
                   <Tooltip
                     formatter={(value: number, name: string) => [
                       value,
-                      name === 'quantity' ? '销量' : '营收',
+                      name === 'orders' ? '销量' : '营收',
                     ]}
                     contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}
                   />
                   <Legend />
-                  <Bar dataKey="quantity" name="销量" fill="#f97316" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="orders" name="订单数" fill="#f97316" radius={[4, 4, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -257,11 +278,11 @@ export default function AdminStatistics() {
           </CardHeader>
           <CardContent>
             <div className="space-y-3">
-              {stallStats
+              {stallStats.length > 0 ? stallStats
                 .sort((a, b) => b.revenue - a.revenue)
                 .map((stall, index) => (
                   <div
-                    key={stall.id}
+                    key={stall.stallId}
                     className="flex items-center justify-between p-4 bg-stone-50 rounded-xl hover:bg-stone-100 transition-colors"
                   >
                     <div className="flex items-center gap-4">
@@ -272,9 +293,9 @@ export default function AdminStatistics() {
                         {index + 1}
                       </div>
                       <div>
-                        <div className="font-semibold text-stone-900">{stall.name}</div>
+                        <div className="font-semibold text-stone-900">{stall.stallName}</div>
                         <div className="text-sm text-stone-500">
-                          {stall.dishCount}道菜品 · {stall.quantity}份销量
+                          {stall.dishCount}道菜品 · {stall.orders}单
                         </div>
                       </div>
                     </div>
@@ -283,11 +304,16 @@ export default function AdminStatistics() {
                         ¥{stall.revenue.toFixed(2)}
                       </div>
                       <Badge variant="success" className="mt-1">
-                        占比 {((stall.revenue / stats.totalRevenue) * 100).toFixed(1)}%
+                        占比 {stats.totalRevenue > 0 ? ((stall.revenue / stats.totalRevenue) * 100).toFixed(1) : 0}%
                       </Badge>
                     </div>
                   </div>
-                ))}
+                )) : (
+                  <div className="text-center py-12 text-stone-500">
+                    <div className="text-4xl mb-2">📊</div>
+                    <p>暂无销售数据</p>
+                  </div>
+                )}
             </div>
           </CardContent>
         </Card>
@@ -301,83 +327,90 @@ export default function AdminStatistics() {
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead>
-                <tr className="border-b border-stone-200">
-                  <th className="text-left py-3 px-4 text-sm font-medium text-stone-500 w-16">排名</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-stone-500">菜品名称</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-stone-500">所属档口</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-stone-500">销量</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-stone-500">营收</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-stone-500">占比</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-stone-500">标签</th>
-                </tr>
-              </thead>
-              <tbody>
-                {topDishes.map((dish, index) => {
-                  const dishInfo = useDishStore.getState().dishes.find((d) => d.name === dish.name);
-                  const percentage = ((dish.revenue / stats.totalRevenue) * 100).toFixed(1);
+          {topDishes.length > 0 ? (
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead>
+                  <tr className="border-b border-stone-200">
+                    <th className="text-left py-3 px-4 text-sm font-medium text-stone-500 w-16">排名</th>
+                    <th className="text-left py-3 px-4 text-sm font-medium text-stone-500">菜品名称</th>
+                    <th className="text-left py-3 px-4 text-sm font-medium text-stone-500">所属档口</th>
+                    <th className="text-left py-3 px-4 text-sm font-medium text-stone-500">销量</th>
+                    <th className="text-left py-3 px-4 text-sm font-medium text-stone-500">营收</th>
+                    <th className="text-left py-3 px-4 text-sm font-medium text-stone-500">占比</th>
+                    <th className="text-left py-3 px-4 text-sm font-medium text-stone-500">标签</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {topDishes.map((dish, index) => {
+                    const dishInfo = dishes.find((d) => d.name === dish.name);
+                    const percentage = stats.totalRevenue > 0 ? ((dish.revenue / stats.totalRevenue) * 100).toFixed(1) : '0';
 
-                  return (
-                    <tr
-                      key={dish.name}
-                      className="border-b border-stone-100 hover:bg-stone-50 transition-colors"
-                    >
-                      <td className="py-4 px-4">
-                        <div
-                          className={`w-8 h-8 rounded-lg flex items-center justify-center font-bold text-sm ${
-                            index === 0
-                              ? 'bg-yellow-100 text-yellow-700'
-                              : index === 1
-                              ? 'bg-stone-100 text-stone-700'
-                              : index === 2
-                              ? 'bg-amber-100 text-amber-700'
-                              : 'bg-stone-50 text-stone-500'
-                          }`}
-                        >
-                          {index + 1}
-                        </div>
-                      </td>
-                      <td className="py-4 px-4">
-                        <div className="flex items-center gap-3">
-                          <img
-                            src={dishInfo?.image}
-                            alt={dish.name}
-                            className="w-10 h-10 rounded-lg object-cover"
-                          />
-                          <span className="font-medium text-stone-900">{dish.name}</span>
-                        </div>
-                      </td>
-                      <td className="py-4 px-4 text-sm text-stone-600">
-                        {dishInfo?.stallName || '-'}
-                      </td>
-                      <td className="py-4 px-4">
-                        <span className="font-semibold text-primary-600">{dish.quantity}份</span>
-                      </td>
-                      <td className="py-4 px-4">
-                        <span className="font-bold text-accent-600">¥{dish.revenue.toFixed(2)}</span>
-                      </td>
-                      <td className="py-4 px-4">
-                        <Badge variant={parseFloat(percentage) >= 10 ? 'success' : 'secondary'}>
-                          {percentage}%
-                        </Badge>
-                      </td>
-                      <td className="py-4 px-4">
-                        <div className="flex gap-1">
-                          {dishInfo?.tags.slice(0, 2).map((tag, idx) => (
-                            <Tag key={idx} variant="success" size="sm">
-                              {tag}
-                            </Tag>
-                          ))}
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+                    return (
+                      <tr
+                        key={dish.name}
+                        className="border-b border-stone-100 hover:bg-stone-50 transition-colors"
+                      >
+                        <td className="py-4 px-4">
+                          <div
+                            className={`w-8 h-8 rounded-lg flex items-center justify-center font-bold text-sm ${
+                              index === 0
+                                ? 'bg-yellow-100 text-yellow-700'
+                                : index === 1
+                                ? 'bg-stone-100 text-stone-700'
+                                : index === 2
+                                ? 'bg-amber-100 text-amber-700'
+                                : 'bg-stone-50 text-stone-500'
+                            }`}
+                          >
+                            {index + 1}
+                          </div>
+                        </td>
+                        <td className="py-4 px-4">
+                          <div className="flex items-center gap-3">
+                            <img
+                              src={dishInfo?.image}
+                              alt={dish.name}
+                              className="w-10 h-10 rounded-lg object-cover"
+                            />
+                            <span className="font-medium text-stone-900">{dish.name}</span>
+                          </div>
+                        </td>
+                        <td className="py-4 px-4 text-sm text-stone-600">
+                          {dishInfo?.stallName || '-'}
+                        </td>
+                        <td className="py-4 px-4">
+                          <span className="font-semibold text-primary-600">{dish.quantity}份</span>
+                        </td>
+                        <td className="py-4 px-4">
+                          <span className="font-bold text-accent-600">¥{dish.revenue.toFixed(2)}</span>
+                        </td>
+                        <td className="py-4 px-4">
+                          <Badge variant={parseFloat(percentage) >= 10 ? 'success' : 'secondary'}>
+                            {percentage}%
+                          </Badge>
+                        </td>
+                        <td className="py-4 px-4">
+                          <div className="flex gap-1">
+                            {dishInfo?.tags.slice(0, 2).map((tag, idx) => (
+                              <Tag key={idx} variant="success" size="sm">
+                                {tag}
+                              </Tag>
+                            ))}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="text-center py-12 text-stone-500">
+              <div className="text-4xl mb-2">🔥</div>
+              <p>暂无热门菜品数据</p>
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -398,14 +431,19 @@ export default function AdminStatistics() {
               <div className="text-2xl mb-2">📈</div>
               <h4 className="font-semibold text-blue-800 mb-1">营收趋势</h4>
               <p className="text-sm text-blue-700">
-                日均营收 ¥{(stats.totalRevenue / stats.dailyData.length).toFixed(2)}，较上周增长 12.5%。
+                日均营收 ¥{avgDailyRevenue.toFixed(2)}
+                {trendPercent !== 0 && (
+                  <span className={trendPercent >= 0 ? ' text-green-700' : ' text-red-700'}>
+                    {' '}（{trendPercent >= 0 ? '↑' : '↓'} {Math.abs(trendPercent).toFixed(1)}%）
+                  </span>
+                )}
               </p>
             </div>
             <div className="p-5 bg-amber-50 rounded-xl border border-amber-200">
               <div className="text-2xl mb-2">⚡</div>
               <h4 className="font-semibold text-amber-800 mb-1">优化建议</h4>
               <p className="text-sm text-amber-700">
-                建议在高峰时段增加 {stallStats[0]?.name || '热门档口'} 的工作人员，减少排队时间。
+                建议在高峰时段增加 {stallStats[0]?.stallName || '热门档口'} 的工作人员，减少排队时间。
               </p>
             </div>
           </div>
