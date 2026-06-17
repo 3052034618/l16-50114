@@ -1,8 +1,9 @@
 import { create } from 'zustand';
-import type { SalesStats, DailyPreparation, PreparationItem, ConsumptionItem, DishSale } from '../types';
-import { mockSalesStats } from '../data/mockStats';
+import type { SalesStats, DailyPreparation, PreparationItem, ConsumptionItem, DishSale, StallStat, Consumption } from '../types';
 import { storage } from '../utils/storage';
 import { getToday, formatDate } from '../utils/date';
+import { useDishStore } from './dishStore';
+import { useConsumptionStore } from './consumptionStore';
 
 interface StatsState {
   salesStats: SalesStats[];
@@ -10,10 +11,9 @@ interface StatsState {
   recordConsumption: (
     date: string,
     items: ConsumptionItem[],
-    totalAmount: number,
-    stallId?: string,
-    stallName?: string
+    totalAmount: number
   ) => void;
+  rebuildFromConsumptions: (consumptions: Consumption[]) => void;
   getStatsByDate: (date: string) => SalesStats | undefined;
   getStatsByDateRange: (startDate: string, endDate: string) => SalesStats[];
   getAggregatedStats: (
@@ -52,18 +52,123 @@ const getDateRangeDates = (startDate: string, endDate: string): string[] => {
   return dates;
 };
 
+const extractDate = (timestamp: string): string => {
+  return timestamp.split(' ')[0].split('T')[0];
+};
+
+const groupItemsByStall = (items: ConsumptionItem[]): Map<string, { stallName: string; revenue: number }> => {
+  const stallMap = new Map<string, { stallName: string; revenue: number }>();
+  const dishStore = useDishStore.getState();
+
+  items.forEach((item) => {
+    const dish = dishStore.getDishById(item.dishId);
+    if (dish) {
+      const existing = stallMap.get(dish.stallId);
+      if (existing) {
+        existing.revenue += item.subtotal;
+      } else {
+        stallMap.set(dish.stallId, { stallName: dish.stallName, revenue: item.subtotal });
+      }
+    }
+  });
+
+  return stallMap;
+};
+
+const buildSalesStatsFromConsumptions = (consumptions: Consumption[]): SalesStats[] => {
+  const dateMap = new Map<string, Consumption[]>();
+  consumptions.forEach((c) => {
+    const date = extractDate(c.timestamp);
+    const list = dateMap.get(date);
+    if (list) {
+      list.push(c);
+    } else {
+      dateMap.set(date, [c]);
+    }
+  });
+
+  const stats: SalesStats[] = [];
+  dateMap.forEach((dayConsumptions, date) => {
+    const dishSalesMap = new Map<string, DishSale>();
+    const stallStatsMap = new Map<string, StallStat>();
+
+    dayConsumptions.forEach((c) => {
+      c.items.forEach((item) => {
+        const existing = dishSalesMap.get(item.dishId);
+        if (existing) {
+          existing.quantity += item.quantity;
+          existing.revenue += item.subtotal;
+        } else {
+          dishSalesMap.set(item.dishId, {
+            dishId: item.dishId,
+            dishName: item.dishName,
+            quantity: item.quantity,
+            revenue: item.subtotal,
+          });
+        }
+      });
+
+      const stallMap = groupItemsByStall(c.items);
+      stallMap.forEach((info, stallId) => {
+        const existing = stallStatsMap.get(stallId);
+        if (existing) {
+          existing.revenue += info.revenue;
+          existing.orders += 1;
+        } else {
+          stallStatsMap.set(stallId, {
+            stallId,
+            stallName: info.stallName,
+            revenue: info.revenue,
+            orders: 1,
+          });
+        }
+      });
+    });
+
+    stats.push({
+      date,
+      totalRevenue: dayConsumptions.reduce((sum, c) => sum + c.totalAmount, 0),
+      totalOrders: dayConsumptions.length,
+      dishSales: Array.from(dishSalesMap.values()),
+      stallStats: Array.from(stallStatsMap.values()),
+    });
+  });
+
+  return stats.sort((a, b) => a.date.localeCompare(b.date));
+};
+
 export const useStatsStore = create<StatsState>((set, get) => ({
   salesStats: [],
   preparations: [],
 
   init: () => {
-    const savedStats = storage.get<SalesStats[]>('salesStats', mockSalesStats);
+    const savedStats = storage.get<SalesStats[]>('salesStats', null);
     const savedPreparations = storage.get<DailyPreparation[]>('preparations', []);
-    set({ salesStats: savedStats, preparations: savedPreparations });
+
+    if (savedStats && savedStats.length > 0) {
+      set({ salesStats: savedStats, preparations: savedPreparations });
+    } else {
+      const consumptions = useConsumptionStore.getState().consumptions;
+      if (consumptions.length > 0) {
+        const rebuilt = buildSalesStatsFromConsumptions(consumptions);
+        storage.set('salesStats', rebuilt);
+        set({ salesStats: rebuilt, preparations: savedPreparations });
+      } else {
+        set({ salesStats: [], preparations: savedPreparations });
+      }
+    }
   },
 
-  recordConsumption: (date, items, totalAmount, stallId, stallName) => {
+  rebuildFromConsumptions: (consumptions) => {
+    const rebuilt = buildSalesStatsFromConsumptions(consumptions);
+    storage.set('salesStats', rebuilt);
+    set({ salesStats: rebuilt });
+  },
+
+  recordConsumption: (date, items, totalAmount) => {
     set((state) => {
+      const stallMap = groupItemsByStall(items);
+
       const existingIndex = state.salesStats.findIndex((s) => s.date === date);
       let updatedStats: SalesStats[];
 
@@ -88,24 +193,24 @@ export const useStatsStore = create<StatsState>((set, get) => ({
           });
 
           const newStallStats = [...s.stallStats];
-          if (stallId && stallName) {
+          stallMap.forEach((info, stallId) => {
             const existingStall = newStallStats.find((st) => st.stallId === stallId);
             if (existingStall) {
-              existingStall.revenue += totalAmount;
+              existingStall.revenue += info.revenue;
               existingStall.orders += 1;
             } else {
               newStallStats.push({
                 stallId,
-                stallName,
-                revenue: totalAmount,
+                stallName: info.stallName,
+                revenue: info.revenue,
                 orders: 1,
               });
             }
-          }
+          });
 
           return {
             ...s,
-            totalRevenue: s.totalRevenue + totalAmount,
+            totalRevenue: Math.round((s.totalRevenue + totalAmount) * 100) / 100,
             totalOrders: s.totalOrders + 1,
             dishSales: newDishSales,
             stallStats: newStallStats,
@@ -119,9 +224,15 @@ export const useStatsStore = create<StatsState>((set, get) => ({
           revenue: item.subtotal,
         }));
 
-        const stallStats = stallId && stallName
-          ? [{ stallId, stallName, revenue: totalAmount, orders: 1 }]
-          : [];
+        const stallStats: StallStat[] = [];
+        stallMap.forEach((info, stallId) => {
+          stallStats.push({
+            stallId,
+            stallName: info.stallName,
+            revenue: info.revenue,
+            orders: 1,
+          });
+        });
 
         const newStat: SalesStats = {
           date,

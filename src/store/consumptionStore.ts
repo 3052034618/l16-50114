@@ -5,6 +5,7 @@ import { mockRecharges, getRechargesByParent, getRechargesByStudent } from '../d
 import { storage } from '../utils/storage';
 import { formatDateTime, getToday } from '../utils/date';
 import { useStatsStore } from './statsStore';
+import { useDishStore } from './dishStore';
 
 interface ConsumptionState {
   consumptions: Consumption[];
@@ -14,9 +15,7 @@ interface ConsumptionState {
     studentName: string,
     type: 'booking' | 'onsite',
     items: ConsumptionItem[],
-    balanceAfter: number,
-    stallId?: string,
-    stallName?: string
+    balanceAfter: number
   ) => Consumption;
   addRecharge: (
     parentId: string,
@@ -47,8 +46,24 @@ export const useConsumptionStore = create<ConsumptionState>((set, get) => ({
     set({ consumptions: savedConsumptions, recharges: savedRecharges });
   },
 
-  addConsumption: (studentId, studentName, type, items, balanceAfter, stallId, stallName) => {
+  addConsumption: (studentId, studentName, type, items, balanceAfter) => {
     const totalAmount = items.reduce((sum, item) => sum + item.subtotal, 0);
+
+    const firstDish = useDishStore.getState().getDishById(items[0]?.dishId);
+    const stallIds = new Set<string>();
+    const stallNames = new Set<string>();
+    items.forEach((item) => {
+      const dish = useDishStore.getState().getDishById(item.dishId);
+      if (dish) {
+        stallIds.add(dish.stallId);
+        stallNames.add(dish.stallName);
+      }
+    });
+    const displayStallId = stallIds.size === 1 ? Array.from(stallIds)[0] : firstDish?.stallId;
+    const displayStallName = stallNames.size === 1
+      ? Array.from(stallNames)[0]
+      : Array.from(stallNames).join('、');
+
     const newConsumption: Consumption = {
       id: `cons-${Date.now()}`,
       studentId,
@@ -58,8 +73,8 @@ export const useConsumptionStore = create<ConsumptionState>((set, get) => ({
       totalAmount,
       balanceAfter,
       timestamp: formatDateTime(new Date()),
-      stallId,
-      stallName,
+      stallId: displayStallId,
+      stallName: displayStallName,
     };
 
     set((state) => {
@@ -71,9 +86,7 @@ export const useConsumptionStore = create<ConsumptionState>((set, get) => ({
     useStatsStore.getState().recordConsumption(
       getToday(),
       items,
-      totalAmount,
-      stallId,
-      stallName
+      totalAmount
     );
 
     return newConsumption;

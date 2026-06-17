@@ -7,7 +7,6 @@ import { useDishStore } from './dishStore';
 import { useConsumptionStore } from './consumptionStore';
 import { useAuthStore } from './authStore';
 import { useNutritionStore } from './nutritionStore';
-import { useStatsStore } from './statsStore';
 
 export interface CartItem {
   dish: Dish;
@@ -169,16 +168,12 @@ export const useBookingStore = create<BookingState>((set, get) => ({
       subtotal: item.subtotal,
     }));
 
-    const firstDish = useDishStore.getState().getDishById(booking.items[0]?.dishId);
-
     useConsumptionStore.getState().addConsumption(
       booking.studentId,
       booking.studentName,
       'booking',
       consumptionItems,
-      newBalance,
-      firstDish?.stallId,
-      firstDish?.stallName
+      newBalance
     );
 
     useAuthStore.getState().updateStudentBalance(booking.studentId, newBalance);
@@ -204,14 +199,6 @@ export const useBookingStore = create<BookingState>((set, get) => ({
       totalProtein,
       totalFat,
       totalCarbs
-    );
-
-    useStatsStore.getState().recordConsumption(
-      today,
-      consumptionItems,
-      booking.totalAmount,
-      firstDish?.stallId,
-      firstDish?.stallName
     );
 
     set((state) => {
