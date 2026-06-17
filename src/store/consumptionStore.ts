@@ -37,8 +37,8 @@ interface ConsumptionState {
 }
 
 export const useConsumptionStore = create<ConsumptionState>((set, get) => ({
-  consumptions: [],
-  recharges: [],
+  consumptions: storage.get<Consumption[]>('consumptions', mockConsumptions),
+  recharges: storage.get<Recharge[]>('recharges', mockRecharges),
 
   init: () => {
     const savedConsumptions = storage.get<Consumption[]>('consumptions', mockConsumptions);

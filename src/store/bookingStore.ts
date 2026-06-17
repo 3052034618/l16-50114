@@ -40,7 +40,7 @@ const generatePickupCode = (mealType: 'lunch' | 'dinner') => {
 };
 
 export const useBookingStore = create<BookingState>((set, get) => ({
-  bookings: [],
+  bookings: storage.get<Booking[]>('bookings', mockBookings),
   cart: [],
   mealType: 'lunch',
 

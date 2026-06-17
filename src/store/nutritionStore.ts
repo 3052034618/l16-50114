@@ -21,7 +21,7 @@ interface NutritionState {
 }
 
 export const useNutritionStore = create<NutritionState>((set, get) => ({
-  records: [],
+  records: storage.get<NutritionRecord[]>('nutritionRecords', mockNutritionRecords),
 
   init: () => {
     const savedRecords = storage.get<NutritionRecord[]>('nutritionRecords', mockNutritionRecords);

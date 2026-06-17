@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, useLayoutEffect } from 'react';
 import { TrendingUp, DollarSign, ShoppingBag, Users, Calendar, BarChart3, PieChart } from 'lucide-react';
 import {
   LineChart,
@@ -17,6 +17,7 @@ import {
 } from 'recharts';
 import { useStatsStore } from '@/store/statsStore';
 import { useDishStore } from '@/store/dishStore';
+import { useConsumptionStore } from '@/store/consumptionStore';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { StatCard } from '@/components/ui/StatCard';
@@ -29,16 +30,23 @@ export default function AdminStatistics() {
     getAggregatedStats,
     getTopDishes,
     getStatsByDateRange,
+    rebuildFromConsumptions,
     init: initStats,
   } = useStatsStore();
   const { stalls, dishes, init: initDishes } = useDishStore();
+  const { consumptions, init: initConsumption } = useConsumptionStore();
 
   const [timeRange, setTimeRange] = useState<'week' | 'month'>('week');
 
+  useLayoutEffect(() => {
+    initDishes();
+    initConsumption();
+    rebuildFromConsumptions(consumptions);
+  }, []);
+
   useEffect(() => {
     initStats();
-    initDishes();
-  }, [initStats, initDishes]);
+  }, [initStats]);
 
   const today = new Date().toISOString().split('T')[0];
   const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
@@ -304,7 +312,7 @@ export default function AdminStatistics() {
                         ¥{stall.revenue.toFixed(2)}
                       </div>
                       <Badge variant="success" className="mt-1">
-                        占比 {stats.totalRevenue > 0 ? ((stall.revenue / stats.totalRevenue) * 100).toFixed(1) : 0}%
+                        占比 {stats.totalRevenue > 0 ? ((stall.revenue / stats.totalRevenue) * 100).toFixed(1) : '0'}%
                       </Badge>
                     </div>
                   </div>

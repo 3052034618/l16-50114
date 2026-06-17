@@ -19,7 +19,7 @@ interface DishState {
 }
 
 export const useDishStore = create<DishState>((set, get) => ({
-  dishes: [],
+  dishes: storage.get<Dish[]>('dishes', mockDishes),
   stalls: mockStalls,
 
   init: () => {

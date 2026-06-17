@@ -138,24 +138,26 @@ const buildSalesStatsFromConsumptions = (consumptions: Consumption[]): SalesStat
 };
 
 export const useStatsStore = create<StatsState>((set, get) => ({
-  salesStats: [],
-  preparations: [],
+  salesStats: (() => {
+    try {
+      const cs = useConsumptionStore.getState();
+      if (cs.consumptions.length > 0) {
+        return buildSalesStatsFromConsumptions(cs.consumptions);
+      }
+    } catch {}
+    return [];
+  })(),
+  preparations: storage.get<DailyPreparation[]>('preparations', []),
 
   init: () => {
-    const savedStats = storage.get<SalesStats[]>('salesStats', null);
+    const consumptions = useConsumptionStore.getState().consumptions;
     const savedPreparations = storage.get<DailyPreparation[]>('preparations', []);
-
-    if (savedStats && savedStats.length > 0) {
-      set({ salesStats: savedStats, preparations: savedPreparations });
+    if (consumptions.length > 0) {
+      const rebuilt = buildSalesStatsFromConsumptions(consumptions);
+      storage.set('salesStats', rebuilt);
+      set({ salesStats: rebuilt, preparations: savedPreparations });
     } else {
-      const consumptions = useConsumptionStore.getState().consumptions;
-      if (consumptions.length > 0) {
-        const rebuilt = buildSalesStatsFromConsumptions(consumptions);
-        storage.set('salesStats', rebuilt);
-        set({ salesStats: rebuilt, preparations: savedPreparations });
-      } else {
-        set({ salesStats: [], preparations: savedPreparations });
-      }
+      set({ salesStats: [], preparations: savedPreparations });
     }
   },
 
